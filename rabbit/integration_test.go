@@ -11,14 +11,15 @@ import (
 	"time"
 
 	"github.com/leandro-lugaresi/hub"
-	"github.com/leandro-lugaresi/message-cannon/runner"
-	"github.com/leandro-lugaresi/message-cannon/supervisor"
 	rabbithole "github.com/michaelklishin/rabbit-hole"
 	"github.com/spf13/viper"
 	"github.com/streadway/amqp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/ory-am/dockertest.v3"
+
+	"github.com/leandro-lugaresi/message-cannon/runner"
+	"github.com/leandro-lugaresi/message-cannon/supervisor"
 )
 
 func TestIntegrationSuite(t *testing.T) {
@@ -230,7 +231,7 @@ type mockRunner struct {
 	exitStatus int
 }
 
-func (m *mockRunner) Process(_ context.Context, _ runner.Message) (int, error) {
+func (m *mockRunner) Process(_ context.Context, _ []runner.Message) (int, error) {
 	atomic.AddInt64(&m.count, 1)
 	return m.exitStatus, nil
 }

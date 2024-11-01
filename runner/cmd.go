@@ -3,10 +3,9 @@ package runner
 import (
 	"context"
 	"os"
+	"os/exec"
 	"strings"
 	"syscall"
-
-	"os/exec"
 
 	"github.com/leandro-lugaresi/hub"
 	"github.com/pkg/errors"
@@ -18,7 +17,17 @@ type command struct {
 	hub  *hub.Hub
 }
 
-func (c *command) Process(ctx context.Context, msg Message) (int, error) {
+func (c *command) Process(ctx context.Context, msgs []Message) (int, error) {
+	for _, msg := range msgs {
+		res, err := c.process(ctx, msg)
+		if err != nil {
+			return res, err
+		}
+	}
+	return ExitACK, nil
+}
+
+func (c *command) process(ctx context.Context, msg Message) (int, error) {
 	cmd := exec.CommandContext(ctx, c.cmd, c.args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

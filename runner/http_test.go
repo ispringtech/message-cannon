@@ -187,7 +187,7 @@ func Test_httpRunner_Process(t *testing.T) {
 			runner, err := New(config, hub.New())
 			require.NoError(t, err)
 
-			got, err := runner.Process(ctx, Message{Body: ctt.args.b, Headers: ctt.args.headers})
+			got, err := runner.Process(ctx, []Message{{Body: ctt.args.b, Headers: ctt.args.headers}})
 			if len(ctt.wants.err) > 0 {
 				require.Contains(t, err.Error(), ctt.wants.err)
 			} else {
@@ -291,7 +291,7 @@ func Test_httpRunner_setHeaders(t *testing.T) {
 			}, hub.New())
 			req, err := http.NewRequest("POST", "http://localhost", bytes.NewReader(ctt.msg.Body))
 			require.NoError(t, err)
-			p.setHeaders(req, ctt.msg)
+			p.setHeaders(req, []Message{ctt.msg})
 			require.Equal(t, ctt.want, req.Header)
 		})
 	}

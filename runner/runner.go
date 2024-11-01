@@ -43,7 +43,7 @@ type (
 
 	// Runnable represent an runnable used by consumers to handle messages.
 	Runnable interface {
-		Process(context.Context, Message) (int, error)
+		Process(context.Context, []Message) (int, error)
 	}
 
 	// Options is a composition os all options used internally by runners.

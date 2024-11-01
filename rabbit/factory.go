@@ -9,11 +9,12 @@ import (
 	"gopkg.in/tomb.v2"
 
 	"github.com/leandro-lugaresi/hub"
+	"github.com/pkg/errors"
+	"github.com/rafaeljesus/retry-go"
+	"github.com/streadway/amqp"
+
 	"github.com/leandro-lugaresi/message-cannon/runner"
 	"github.com/leandro-lugaresi/message-cannon/supervisor"
-	"github.com/pkg/errors"
-	retry "github.com/rafaeljesus/retry-go"
-	"github.com/streadway/amqp"
 )
 
 // Factory is the block responsible for create consumers and restart the rabbitMQ connections.
@@ -127,17 +128,19 @@ func (f *Factory) newConsumer(name string, cfg ConsumerConfig) (*consumer, error
 		},
 	})
 	return &consumer{
-		queue:       cfg.Queue.Name,
-		name:        name,
-		hash:        strconv.FormatInt(atomic.AddInt64(&f.number, 1), 10),
-		opts:        cfg.Options,
-		factoryName: f.Name(),
-		channel:     ch,
-		t:           tomb.Tomb{},
-		runner:      runner,
-		hub:         f.hub.With(hub.Fields{"consumer": name}),
-		workerPool:  make(pool, cfg.MaxWorkers),
-		timeout:     cfg.Runner.Timeout,
+		queue:         cfg.Queue.Name,
+		name:          name,
+		hash:          strconv.FormatInt(atomic.AddInt64(&f.number, 1), 10),
+		opts:          cfg.Options,
+		factoryName:   f.Name(),
+		channel:       ch,
+		t:             tomb.Tomb{},
+		runner:        runner,
+		hub:           f.hub.With(hub.Fields{"consumer": name}),
+		workerPool:    make(pool, cfg.MaxWorkers),
+		timeout:       cfg.Runner.Timeout,
+		bufferTimeout: cfg.BufferTimeout,
+		bufferSize:    cfg.BufferSize,
 	}, nil
 }
 

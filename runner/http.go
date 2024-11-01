@@ -24,8 +24,8 @@ type httpRunner struct {
 	returnOn5xx  int
 }
 
-func (p *httpRunner) Process(ctx context.Context, msg Message) (int, error) {
-	req, err := p.prepareRequest(msg)
+func (p *httpRunner) Process(ctx context.Context, msgs []Message) (int, error) {
+	req, err := p.prepareRequest(msgs)
 	if err != nil {
 		return ExitNACKRequeue, errors.Wrap(err, "request creation failed")
 	}
@@ -68,34 +68,67 @@ func (p *httpRunner) Process(ctx context.Context, msg Message) (int, error) {
 	return content.ResponseCode, nil
 }
 
-func (p *httpRunner) prepareRequest(msg Message) (*http.Request, error) {
-	contentReader := bytes.NewReader(msg.Body)
+func (p *httpRunner) prepareRequest(msgs []Message) (*http.Request, error) {
+	var bodyData []byte
+	if len(msgs) > 1 {
+		body := make([]json.RawMessage, 0, len(msgs))
+		for _, msg := range msgs {
+			msgBody := msg.Body
+
+			correlationID, ok := msg.Headers["Correlation-Id"].(string)
+			if ok {
+				var err error
+				msgBody, err = appendMapToJSON(msgBody, map[string]string{
+					"correlation_id": correlationID,
+				})
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			body = append(body, msgBody)
+		}
+
+		var err error
+		bodyData, err = json.Marshal(body)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to marshal request body")
+		}
+	} else {
+		bodyData = msgs[0].Body
+	}
+
+	contentReader := bytes.NewReader(bodyData)
 	req, err := http.NewRequest("POST", p.url, contentReader)
 	if err != nil {
 		return req, err
 	}
-	p.setHeaders(req, msg)
+
+	p.setHeaders(req, msgs)
 	return req, nil
 }
 
-func (p *httpRunner) setHeaders(req *http.Request, msg Message) {
+func (p *httpRunner) setHeaders(req *http.Request, msgs []Message) {
 	for k, v := range p.headers {
 		req.Header.Set(k, v)
 	}
-	for k, v := range msg.Headers {
-		switch vt := v.(type) {
-		case int, int16, int32, int64, float32, float64:
-			req.Header.Set(k, fmt.Sprint(vt))
-		case string:
-			req.Header.Set(k, vt)
-		case []byte:
-			req.Header.Set(k, string(vt))
-		case time.Time:
-			req.Header.Set(k, vt.Format(http.TimeFormat))
-		case bool:
-			req.Header.Set(k, strconv.FormatBool(vt))
+	for _, msg := range msgs {
+		for k, v := range msg.Headers {
+			switch vt := v.(type) {
+			case int, int16, int32, int64, float32, float64:
+				req.Header.Set(k, fmt.Sprint(vt))
+			case string:
+				req.Header.Set(k, vt)
+			case []byte:
+				req.Header.Set(k, string(vt))
+			case time.Time:
+				req.Header.Set(k, vt.Format(http.TimeFormat))
+			case bool:
+				req.Header.Set(k, strconv.FormatBool(vt))
+			}
 		}
 	}
+
 }
 
 func (p *httpRunner) executeRequest(req *http.Request) (*http.Response, []byte, error) {
@@ -122,6 +155,20 @@ func (p *httpRunner) executeRequest(req *http.Request) (*http.Response, []byte, 
 		})
 	}
 	return resp, body, nil
+}
+
+func appendMapToJSON(data []byte, m map[string]string) ([]byte, error) {
+	var dataRaw map[string]interface{}
+
+	err := json.Unmarshal(data, &dataRaw)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range m {
+		dataRaw[k] = v
+	}
+
+	return json.Marshal(dataRaw)
 }
 
 func newHTTP(c Config, h *hub.Hub) *httpRunner {

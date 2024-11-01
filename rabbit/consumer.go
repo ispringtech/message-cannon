@@ -3,27 +3,31 @@ package rabbit
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"gopkg.in/tomb.v2"
 
 	"github.com/leandro-lugaresi/hub"
-	"github.com/leandro-lugaresi/message-cannon/runner"
 	"github.com/streadway/amqp"
+
+	"github.com/leandro-lugaresi/message-cannon/runner"
 )
 
 type consumer struct {
-	runner      runner.Runnable
-	hash        string
-	name        string
-	queue       string
-	workerPool  pool
-	timeout     time.Duration
-	factoryName string
-	opts        Options
-	channel     *amqp.Channel
-	t           tomb.Tomb
-	hub         *hub.Hub
+	runner        runner.Runnable
+	hash          string
+	name          string
+	queue         string
+	workerPool    pool
+	timeout       time.Duration
+	bufferTimeout time.Duration
+	bufferSize    int
+	factoryName   string
+	opts          Options
+	channel       *amqp.Channel
+	t             tomb.Tomb
+	hub           *hub.Hub
 }
 
 // Run start a goroutine to consume messages and pass to one runner.
@@ -74,19 +78,25 @@ func (c *consumer) Run() {
 					})
 					return errors.New("receive an empty delivery")
 				}
+
+				msgs := []amqp.Delivery{msg}
+				if c.bufferTimeout != 0 {
+					msgs = c.consumeBuffer(d, msg)
+				}
+
 				// When maxWorkers goroutines are in flight, Acquire blocks until one of the
 				// workers finishes.
 				c.workerPool.Acquire()
-				go func(msg amqp.Delivery) {
+				go func(msgs []amqp.Delivery) {
 					nctx := ctx
 					if c.timeout >= time.Second {
 						var canc context.CancelFunc
 						nctx, canc = context.WithTimeout(ctx, c.timeout)
 						defer canc()
 					}
-					c.processMessage(nctx, msg)
+					c.processMessages(nctx, msgs)
 					c.workerPool.Release()
-				}(msg)
+				}(slices.Clone(msgs))
 			}
 		}
 	})
@@ -113,10 +123,40 @@ func (c *consumer) FactoryName() string {
 	return c.factoryName
 }
 
-func (c *consumer) processMessage(ctx context.Context, msg amqp.Delivery) {
+func (c *consumer) consumeBuffer(d <-chan amqp.Delivery, firstDelivery amqp.Delivery) []amqp.Delivery {
+	deliveries := []amqp.Delivery{firstDelivery}
+
+	for {
+		select {
+		case delivery, ok := <-d:
+			if !ok {
+				return deliveries
+			}
+			deliveries = append(deliveries, delivery)
+			if len(deliveries) >= c.bufferSize {
+				// dot not consume all messages on high message rate
+				return deliveries
+			}
+			continue // go to next iteration
+		case <-time.After(c.bufferTimeout):
+			return deliveries
+		}
+	}
+}
+
+func (c *consumer) processMessages(ctx context.Context, msgs []amqp.Delivery) {
 	var err error
 	start := time.Now()
-	status, err := c.runner.Process(ctx, runner.Message{Body: msg.Body, Headers: getHeaders(msg)})
+
+	messages := make([]runner.Message, 0, len(msgs))
+	for _, msg := range msgs {
+		messages = append(messages, runner.Message{
+			Body:    msg.Body,
+			Headers: getHeaders(msg),
+		})
+	}
+
+	status, err := c.runner.Process(ctx, messages)
 	duration := time.Since(start)
 	fields := hub.Fields{
 		"duration":    duration,
@@ -138,22 +178,44 @@ func (c *consumer) processMessage(ctx context.Context, msg amqp.Delivery) {
 		Name:   topic,
 		Fields: fields,
 	})
+
+	messagesAcknowdger := func(f func(amqp.Delivery) error) error {
+		var firstErr error
+		for _, msg := range msgs {
+			err := f(msg)
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		return firstErr
+	}
+
 	switch status {
 	case runner.ExitACK:
-		err = msg.Ack(false)
+		err = messagesAcknowdger(func(msg amqp.Delivery) error {
+			return msg.Ack(false)
+		})
 	case runner.ExitFailed:
-		err = msg.Reject(true)
+		err = messagesAcknowdger(func(msg amqp.Delivery) error {
+			return msg.Reject(true)
+		})
 	case runner.ExitRetry, runner.ExitNACKRequeue, runner.ExitTimeout:
-		err = msg.Nack(false, true)
+		err = messagesAcknowdger(func(msg amqp.Delivery) error {
+			return msg.Nack(false, true)
+		})
 	case runner.ExitNACK:
-		err = msg.Nack(false, false)
+		err = messagesAcknowdger(func(msg amqp.Delivery) error {
+			return msg.Nack(false, false)
+		})
 	default:
 		c.hub.Publish(hub.Message{
 			Name:   "rabbit.consumer.error",
 			Body:   []byte("the runner returned an unexpected exitStatus. Message will be requeued."),
 			Fields: hub.Fields{"status": status},
 		})
-		err = msg.Reject(true)
+		err = messagesAcknowdger(func(msg amqp.Delivery) error {
+			return msg.Reject(true)
+		})
 	}
 	if err != nil {
 		c.hub.Publish(hub.Message{

@@ -5,8 +5,9 @@ import (
 	"time"
 
 	"github.com/creasty/defaults"
-	"github.com/leandro-lugaresi/message-cannon/runner"
 	"github.com/streadway/amqp"
+
+	"github.com/leandro-lugaresi/message-cannon/runner"
 )
 
 // Config describes all available options for amqp connection creation.
@@ -42,6 +43,8 @@ type ConsumerConfig struct {
 	Queue         QueueConfig   `mapstructure:"queue"`
 	Options       Options       `mapstructure:"options"`
 	Runner        runner.Config `mapstructure:"runner"`
+	BufferTimeout time.Duration `mapstructure:"buffer-timeout"`
+	BufferSize    int           `mapstructure:"buffer-size"`
 }
 
 // ExchangeConfig describes exchange's configuration.
